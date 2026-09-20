@@ -1,5 +1,4 @@
 cmake_minimum_required(VERSION 3.18)
-set(DMOD_DIR "/data/projects/chocotechnologies/public/dmtelnet/../dmod")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
