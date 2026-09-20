@@ -78,3 +78,4 @@ target_include_directories(${DMOD_MODULE_NAME}_if INTERFACE
 #   )
 enable_testing()
 add_subdirectory(tests)
+add_subdirectory(tools)

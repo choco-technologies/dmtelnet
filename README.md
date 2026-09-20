@@ -7,7 +7,15 @@ dmtelnet DMOD library module.
 
 ## Description
 
-TODO: describe what this module does.
+A transport-agnostic Telnet protocol engine (RFC 854): IAC command parsing,
+WILL/WONT/DO/DONT option negotiation, subnegotiation (`IAC SB ... IAC SE`),
+and 0xFF byte-stuffing in both directions. dmtelnet never touches a socket
+itself - it is fed raw bytes via `dmtelnet_recv()` and produces raw bytes
+via a callback, so it can sit on top of `dmtcp`, `dmudp`, a UART, or a unit
+test's own loopback buffer.
+
+See `tools/telnetd` for `telnetd`, a Telnet server built on this library
+that serves an interactive `dmell` login shell over TCP.
 
 ## Building
 
@@ -50,21 +58,24 @@ dmod_loader build/dmf/test_dmtelnet.dmf
 
 ## Usage
 
-<TBD>
-
 This library module provides functions that can be used by other modules:
 
 ```c
 #include "dmtelnet.h"
 ```
 
+See [docs/api-reference.md](docs/api-reference.md) for a worked example.
+
 ## API
 
 | Function | Description |
 |----------|-------------|
-| `dmtelnet_create()` | Create a new `dmtelnet_t` instance. |
-| `dmtelnet_destroy()` | Destroy an instance created by `_create()`. |
-| `dmtelnet_is_valid()` | Check whether a handle is a valid instance. |
+| `dmtelnet_create(callbacks, user_data)` | Create a session. `callbacks->on_send` is required. |
+| `dmtelnet_destroy(session)` | Destroy a session created by `_create()`. |
+| `dmtelnet_recv(session, data, data_len)` | Feed newly-received raw bytes into the session. |
+| `dmtelnet_send(session, data, data_len)` | Send application data (IAC-escaped). |
+| `dmtelnet_negotiate(session, cmd, option)` | Send `IAC <cmd> <option>`. |
+| `dmtelnet_send_subnegotiation(session, option, data, data_len)` | Send `IAC SB <option> <data> IAC SE`. |
 
 See [include/dmtelnet.h](include/dmtelnet.h) for the full
 declarations and [docs/api-reference.md](docs/api-reference.md) for the
@@ -89,6 +100,8 @@ dmtelnet/
 ├── tests/
 │   ├── CMakeLists.txt
 │   └── dmtelnet_test.c
+├── tools/
+│   └── telnetd/       # Telnet server (dmdrvi driver -> dmell over TCP)
 ├── CMakeLists.txt
 ├── Makefile
 ├── dmtelnet.dmr
