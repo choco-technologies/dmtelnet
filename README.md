@@ -1,7 +1,7 @@
 # dmtelnet
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/choco-technologies/dmtelnet/actions/workflows/ci.yml/badge.svg)](https://github.com/choco-technologies/dmtelnet/actions/workflows/ci.yml)
+[![CI](https://github.com/choco-technologies/dmtelnet/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/choco-technologies/dmtelnet/actions/workflows/ci.yml)
 
 dmtelnet DMOD library module.
 
