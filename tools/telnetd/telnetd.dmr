@@ -1,0 +1,35 @@
+# DMOD Resource File for telnetd
+# This file specifies where resources should be installed
+
+# === Core Module ===
+# Main module file - always installed
+dmf=./${module}.dmf => ${destination}/${module}.dmf [origin=${dmf_dir}/${module}.dmf]
+
+# Compressed module
+dmfc=./${module}.dmfc => ${destination}/${module}.dmfc [origin=${build_dir}/dmfc/${module}.dmfc]
+
+# Dependencies file (if exists)
+dmd=./${module}.dmd => ${destination}/${module}.dmd [origin=${dmf_dir}/${module}.dmd]
+
+# Version information
+version=./${module}_version.txt => ${destination}/${module}_version.txt [origin=${dmf_dir}/${module}_version.txt]
+
+# === Documentation ===
+# README file
+# NOTE: ${repo_dir} is the top-level repo root (CMAKE_SOURCE_DIR), since
+# telnetd is built via add_subdirectory() from dmtelnet's own CMakeLists.txt -
+# so paths here are given relative to the repo root, not to tools/telnetd
+# itself (see dmtty/tools/console/console.dmr for the same pattern).
+readme=./README.md => ${destination}/${module}/README.md [origin=${repo_dir}/tools/telnetd/README.md]
+
+# === Configuration Files ===
+# telnetd.ini - dmdevfs driver config (driver_name=telnetd, port=<n>), ready
+# to drop into dmdevfs's own scanned config directory - see README.md
+configs=./configs => ${destination}/${module}/configs [origin=${repo_dir}/tools/telnetd/configs]
+
+# === License ===
+# License file (shared with the rest of the dmtelnet repository)
+license=./LICENSE => ${destination}/${module}/LICENSE [origin=${repo_dir}/LICENSE]
+
+# Adding itself
+dmr=./${module}.dmr => ${destination}/${module}/${module}.dmr [origin=${repo_dir}/tools/telnetd/${module}.dmr]
