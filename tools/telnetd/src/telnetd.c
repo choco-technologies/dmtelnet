@@ -27,6 +27,14 @@
  *     (console@.ini leaves the tty node attached, waiting for a new
  *     session - see its own doc comment). Only the peer disconnecting (or
  *     the tty node being explicitly detached) closes the connection.
+ *
+ * NVT ASCII line endings (RFC 854): the Telnet protocol's "network virtual
+ * terminal" requires a CR LF (or CR NUL) pair for end-of-line, while dmtty's
+ * own line discipline (like the rest of this codebase) is plain Unix '\n'.
+ * telnetd translates between the two at its own boundary - see
+ * telnet_on_data()'s inbound normalization and telnetd_dmdrvi_write()'s
+ * outbound expansion - so nothing above it (dm_sw_ring, dmtty, dmell) ever
+ * has to know Telnet uses a different convention.
  */
 #define DMOD_ENABLE_REGISTRATION ON
 #include "dmod.h"
@@ -58,7 +66,8 @@ typedef struct
 
     dmtcp_conn_t conn;       /**< NULL once the connection has ended - see dmtcp_conn_t's "Handle lifetime" doc comment */
     dmtelnet_t telnet;
-    dm_sw_ring_t rx_ring;    /**< Decoded (non-command) bytes, waiting to be read */
+    dm_sw_ring_t rx_ring;    /**< Decoded (non-command) bytes, already CRLF-normalized to '\n', waiting to be read */
+    bool rx_pending_cr;      /**< See telnet_on_data(): a CR was seen and might still be the start of a CR LF/CR NUL pair */
 
     struct dmdrvi_context* context;
 } telnetd_connection_t;
@@ -106,11 +115,49 @@ static telnetd_connection_t* find_free_connection_slot_locked(struct dmdrvi_cont
  *                      dmtelnet callbacks
  * ========================================================================== */
 
+/**
+ * NVT ASCII (RFC 854) sends CR LF, or CR NUL, for what dmtty/dmell just
+ * want as a single '\n' - and, per the RFC, a bare CR with neither is still
+ * a valid end-of-line, not a literal carriage return. Normalizes all three
+ * to '\n' in place, byte by byte, using c->rx_pending_cr to remember a CR
+ * across calls in case the LF/NUL half of the pair arrives in the next TCP
+ * segment.
+ */
 static void telnet_on_data(dmtelnet_t session, const uint8_t* data, size_t data_len, void* user_data)
 {
     (void)session;
     telnetd_connection_t* c = user_data;
-    dm_sw_ring_write(c->rx_ring, data, (dm_sw_ring_capacity_t)data_len);
+
+    uint8_t normalized[64];
+    size_t normalized_len = 0;
+
+    for (size_t i = 0; i < data_len; i++)
+    {
+        uint8_t byte = data[i];
+
+        if (c->rx_pending_cr)
+        {
+            c->rx_pending_cr = false;
+            if (byte == '\n' || byte == '\0')
+                continue; /* Second half of a CR LF / CR NUL pair - already emitted the '\n' for the CR itself */
+        }
+
+        if (byte == '\r')
+        {
+            c->rx_pending_cr = true;
+            byte = '\n';
+        }
+
+        if (normalized_len >= sizeof(normalized))
+        {
+            dm_sw_ring_write(c->rx_ring, normalized, (dm_sw_ring_capacity_t)normalized_len);
+            normalized_len = 0;
+        }
+        normalized[normalized_len++] = byte;
+    }
+
+    if (normalized_len > 0)
+        dm_sw_ring_write(c->rx_ring, normalized, (dm_sw_ring_capacity_t)normalized_len);
 }
 
 static void telnet_on_send(dmtelnet_t session, const uint8_t* data, size_t data_len, void* user_data)
@@ -494,10 +541,30 @@ dmod_dmdrvi_dif_api_declaration(1.0, telnetd, size_t, _write, ( dmdrvi_context_t
     if (c == NULL || c->closed || buffer == NULL || size == 0)
         return 0;
 
-    /* dmtelnet_send() IAC-escapes and hands the result to telnet_on_send(),
-     * which does the actual dmtcp_send() - best-effort, see this file's top
-     * comment. */
-    dmtelnet_send(c->telnet, buffer, size);
+    /* Expand dmtty's plain '\n' to NVT ASCII's required CR LF before
+     * IAC-escaping and sending - see this file's top comment. Flushed in
+     * bounded chunks through dmtelnet_send(), which hands each one to
+     * telnet_on_send() (the actual dmtcp_send(), best-effort). */
+    const uint8_t* bytes = buffer;
+    uint8_t expanded[64];
+    size_t expanded_len = 0;
+
+    for (size_t i = 0; i < size; i++)
+    {
+        if (expanded_len >= sizeof(expanded) - 1)
+        {
+            dmtelnet_send(c->telnet, expanded, expanded_len);
+            expanded_len = 0;
+        }
+
+        if (bytes[i] == '\n')
+            expanded[expanded_len++] = '\r';
+        expanded[expanded_len++] = bytes[i];
+    }
+
+    if (expanded_len > 0)
+        dmtelnet_send(c->telnet, expanded, expanded_len);
+
     return size;
 }
 
