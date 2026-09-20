@@ -3,3 +3,4 @@ $include https://github.com/choco-technologies/dmtelnet/releases/download/vlates
 
 # Module entry with version placeholder - expanded by $version-available
 dmtelnet https://github.com/choco-technologies/dmtelnet/releases/download/v<version>/dmtelnet-v<version>-<arch_name>.zip
+telnetd https://github.com/choco-technologies/dmtelnet/releases/download/v<version>/telnetd-v<version>-<arch_name>.zip
