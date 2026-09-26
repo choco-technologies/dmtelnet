@@ -358,7 +358,7 @@ static void telnetd_on_accept(dmtcp_conn_t conn, const dmip_addr_t* peer, uint16
  *                      DMDRVI interface
  * ========================================================================== */
 
-dmod_dmdrvi_dif_api_declaration(1.0, telnetd, dmdrvi_context_t, _create, ( dmini_context_t config, dmdrvi_dev_num_t* dev_num ))
+dmod_dmdrvi_dif_api_declaration(2.0, telnetd, dmdrvi_context_t, _create, ( dmini_context_t config, dmdrvi_dev_num_t* dev_num ))
 {
     if (dev_num == NULL)
     {
@@ -407,7 +407,7 @@ dmod_dmdrvi_dif_api_declaration(1.0, telnetd, dmdrvi_context_t, _create, ( dmini
     return context;
 }
 
-dmod_dmdrvi_dif_api_declaration(1.0, telnetd, void, _path_ready, ( dmdrvi_context_t context, const dmdrvi_dev_num_t* dev_num, const char* path ))
+dmod_dmdrvi_dif_api_declaration(2.0, telnetd, void, _path_ready, ( dmdrvi_context_t context, const dmdrvi_dev_num_t* dev_num, const char* path ))
 {
     if (!is_valid_context(context) || dev_num == NULL || path == NULL)
         return;
@@ -433,7 +433,7 @@ dmod_dmdrvi_dif_api_declaration(1.0, telnetd, void, _path_ready, ( dmdrvi_contex
     dmhaman_call_handler(DMTTY_HANDLER_NAME_DEVICE_AVAILABLE, &tty_params);
 }
 
-dmod_dmdrvi_dif_api_declaration(1.0, telnetd, void, _free, ( dmdrvi_context_t context ))
+dmod_dmdrvi_dif_api_declaration(2.0, telnetd, void, _free, ( dmdrvi_context_t context ))
 {
     if (!is_valid_context(context))
         return;
@@ -464,7 +464,7 @@ dmod_dmdrvi_dif_api_declaration(1.0, telnetd, void, _free, ( dmdrvi_context_t co
     Dmod_Free(context);
 }
 
-dmod_dmdrvi_dif_api_declaration(1.0, telnetd, void*, _open, ( dmdrvi_context_t context, int flags, const dmdrvi_dev_num_t* dev_num ))
+dmod_dmdrvi_dif_api_declaration(2.0, telnetd, void*, _open, ( dmdrvi_context_t context, int flags, const dmdrvi_dev_num_t* dev_num ))
 {
     (void)flags;
     if (!is_valid_context(context) || dev_num == NULL)
@@ -479,7 +479,7 @@ dmod_dmdrvi_dif_api_declaration(1.0, telnetd, void*, _open, ( dmdrvi_context_t c
     return c;
 }
 
-dmod_dmdrvi_dif_api_declaration(1.0, telnetd, void, _close, ( dmdrvi_context_t context, void* handle ))
+dmod_dmdrvi_dif_api_declaration(2.0, telnetd, void, _close, ( dmdrvi_context_t context, void* handle ))
 {
     (void)context;
     telnetd_connection_t* c = handle;
@@ -513,11 +513,29 @@ dmod_dmdrvi_dif_api_declaration(1.0, telnetd, void, _close, ( dmdrvi_context_t c
  * loop's own `c->closed` flag (set by teardown_connection(), which runs on
  * a different thread) is the tradeoff: bounded by TELNETD_READ_POLL_MS
  * latency on a disconnect, instead of a blocked reader thread forever.
+ *
+ * @param context DMDRVI context (unused - the connection is non-seekable and
+ * stream-oriented, so there is nothing context-level to look up)
+ * @param handle Device handle (the connection slot)
+ * @param buffer Buffer to read data into
+ * @param size Number of bytes requested; values greater than INT64_MAX fail
+ * with -EOVERFLOW because they cannot be represented by dmdrvi_ssize_t
+ * @param offset Unused - telnetd is a non-seekable stream device; must still
+ * be non-negative per the dmdrvi 2.0 contract
+ *
+ * @return dmdrvi_ssize_t Number of bytes read, zero at EOF (peer
+ * disconnected), or a negative errno-compatible error
  */
-dmod_dmdrvi_dif_api_declaration(1.0, telnetd, size_t, _read, ( dmdrvi_context_t context, void* handle, void* buffer, size_t size, uint32_t offset ))
+dmod_dmdrvi_dif_api_declaration(2.0, telnetd, dmdrvi_ssize_t, _read, ( dmdrvi_context_t context, void* handle, void* buffer, size_t size, dmdrvi_offset_t offset ))
 {
     (void)context;
     (void)offset;
+
+    if (offset < 0)
+        return -EINVAL;
+    if (size > (size_t)INT64_MAX)
+        return -EOVERFLOW;
+
     telnetd_connection_t* c = handle;
     if (c == NULL || buffer == NULL || size == 0)
         return 0;
@@ -526,17 +544,36 @@ dmod_dmdrvi_dif_api_declaration(1.0, telnetd, size_t, _read, ( dmdrvi_context_t 
     {
         dm_sw_ring_capacity_t got = dm_sw_ring_read(c->rx_ring, buffer, (dm_sw_ring_capacity_t)size);
         if (got > 0)
-            return got;
+            return (dmdrvi_ssize_t)got;
         if (c->closed)
             return 0; /* EOF */
         dmosi_thread_sleep(TELNETD_READ_POLL_MS);
     }
 }
 
-dmod_dmdrvi_dif_api_declaration(1.0, telnetd, size_t, _write, ( dmdrvi_context_t context, void* handle, const void* buffer, size_t size, uint32_t offset ))
+/**
+ * @param context DMDRVI context (unused, see telnetd_dmdrvi_read())
+ * @param handle Device handle (the connection slot)
+ * @param buffer Buffer with data to write
+ * @param size Number of bytes to write; values greater than INT64_MAX fail
+ * with -EOVERFLOW because they cannot be represented by dmdrvi_ssize_t
+ * @param offset Unused - telnetd is a non-seekable stream device; must still
+ * be non-negative per the dmdrvi 2.0 contract
+ *
+ * @return dmdrvi_ssize_t Number of bytes written (always `size` on success,
+ * since this is best-effort per this file's top comment), or a negative
+ * errno-compatible error
+ */
+dmod_dmdrvi_dif_api_declaration(2.0, telnetd, dmdrvi_ssize_t, _write, ( dmdrvi_context_t context, void* handle, const void* buffer, size_t size, dmdrvi_offset_t offset ))
 {
     (void)context;
     (void)offset;
+
+    if (offset < 0)
+        return -EINVAL;
+    if (size > (size_t)INT64_MAX)
+        return -EOVERFLOW;
+
     telnetd_connection_t* c = handle;
     if (c == NULL || c->closed || buffer == NULL || size == 0)
         return 0;
@@ -565,10 +602,10 @@ dmod_dmdrvi_dif_api_declaration(1.0, telnetd, size_t, _write, ( dmdrvi_context_t
     if (expanded_len > 0)
         dmtelnet_send(c->telnet, expanded, expanded_len);
 
-    return size;
+    return (dmdrvi_ssize_t)size;
 }
 
-dmod_dmdrvi_dif_api_declaration(1.0, telnetd, int, _ioctl, ( dmdrvi_context_t context, void* handle, int command, void* arg ))
+dmod_dmdrvi_dif_api_declaration(2.0, telnetd, int, _ioctl, ( dmdrvi_context_t context, void* handle, int command, void* arg ))
 {
     (void)context;
     (void)handle;
@@ -577,14 +614,14 @@ dmod_dmdrvi_dif_api_declaration(1.0, telnetd, int, _ioctl, ( dmdrvi_context_t co
     return -ENOSYS;
 }
 
-dmod_dmdrvi_dif_api_declaration(1.0, telnetd, int, _flush, ( dmdrvi_context_t context, void* handle ))
+dmod_dmdrvi_dif_api_declaration(2.0, telnetd, int, _flush, ( dmdrvi_context_t context, void* handle ))
 {
     (void)context;
     (void)handle;
     return 0; /* Nothing buffered locally beyond what dmtcp already owns. */
 }
 
-dmod_dmdrvi_dif_api_declaration(1.0, telnetd, int, _stat, ( dmdrvi_context_t context, const char* path, dmdrvi_stat_t* stat ))
+dmod_dmdrvi_dif_api_declaration(2.0, telnetd, int, _stat, ( dmdrvi_context_t context, const char* path, dmdrvi_stat_t* stat ))
 {
     (void)context;
     (void)path;
