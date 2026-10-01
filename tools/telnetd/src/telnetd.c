@@ -58,7 +58,7 @@
 typedef struct
 {
     bool in_use;   /**< Slot holds a live (or tearing-down) connection */
-    bool opened;   /**< telnetd_dmdrvi_open() has been called for this slot - see teardown_connection() */
+    size_t open_count; /**< Handles currently open through telnetd_dmdrvi_open() - the connection is hung up when the last one is closed, see telnetd_dmdrvi_close() */
     bool closed;   /**< The TCP side is gone; telnetd_dmdrvi_read() should report EOF */
 
     dmdrvi_dev_num_t dev_num;
@@ -204,11 +204,11 @@ static void telnet_on_negotiate(dmtelnet_t session, dmtelnet_cmd_t cmd, uint8_t 
 
 /**
  * Unwinds a connection: announces it away from dmtty/dmdevfs, then either
- * frees local resources immediately (nothing ever opened this device's
- * backing file, so nothing else can be touching it) or leaves that to
- * telnetd_dmdrvi_close(), which dmtty's own detach - triggered
- * synchronously by the DEVICE_UNAVAILABLE broadcast below - is guaranteed
- * to call before this function returns.
+ * frees local resources immediately (no handle is open on this device, so
+ * nothing else can be touching it) or leaves that to the last
+ * telnetd_dmdrvi_close() - dmtty's own detach, triggered synchronously by
+ * the DEVICE_UNAVAILABLE broadcast below, or the remaining processes on the
+ * tty closing their handles once reads report EOF.
  *
  * Called from dmtcp's own terminal callbacks (on_closed/on_reset/on_error),
  * where `conn` is about to be freed - never touches `c->conn` itself, per
@@ -230,10 +230,13 @@ static void teardown_connection(telnetd_connection_t* c)
 
     dmdrvi_device_unavailable(c->context, &c->dev_num);
 
-    if (!c->opened)
+    dmosi_mutex_lock(c->context->connections_mutex);
+    bool still_open = c->open_count > 0;
+    dmosi_mutex_unlock(c->context->connections_mutex);
+    if (!still_open)
     {
-        /* No dmdrvi_open() ever happened for this slot (e.g. the peer
-         * dropped the connection before dmtty got around to attaching it) -
+        /* No handle is open on this slot (e.g. the peer dropped the
+         * connection before dmtty got around to attaching it) -
          * telnetd_dmdrvi_close() will never be called for it, so free here
          * instead of leaking the slot forever. */
         if (c->telnet != NULL) { dmtelnet_destroy(c->telnet); c->telnet = NULL; }
@@ -473,7 +476,7 @@ dmod_dmdrvi_dif_api_declaration(2.0, telnetd, void*, _open, ( dmdrvi_context_t c
     dmosi_mutex_lock(context->connections_mutex);
     telnetd_connection_t* c = find_connection_by_minor_locked(context, dev_num->minor);
     if (c != NULL)
-        c->opened = true;
+        c->open_count++;
     dmosi_mutex_unlock(context->connections_mutex);
 
     return c;
@@ -481,9 +484,20 @@ dmod_dmdrvi_dif_api_declaration(2.0, telnetd, void*, _open, ( dmdrvi_context_t c
 
 dmod_dmdrvi_dif_api_declaration(2.0, telnetd, void, _close, ( dmdrvi_context_t context, void* handle ))
 {
-    (void)context;
     telnetd_connection_t* c = handle;
-    if (c == NULL)
+    if (!is_valid_context(context) || c == NULL)
+        return;
+
+    /* The node is opened more than once: dmtty's backing file, and the
+     * stdin/stdout/stderr/stdlog of every process bound to the tty (console
+     * closes its own when it hands the session over to the shell) - only the
+     * last close ends the session. */
+    dmosi_mutex_lock(context->connections_mutex);
+    if (c->open_count > 0)
+        c->open_count--;
+    size_t remaining = c->open_count;
+    dmosi_mutex_unlock(context->connections_mutex);
+    if (remaining > 0)
         return;
 
     if (c->conn != NULL)
